@@ -33,7 +33,7 @@ set(BUILD_TESTS OFF CACHE BOOL "Build Sophus tests" FORCE)
 set(BUILD_SOPHUS_TESTS OFF CACHE BOOL "Build Sophus tests" FORCE)
 set(BUILD_SOPHUS_EXAMPLES OFF CACHE BOOL "Build Sophus examples" FORCE)
 add_subdirectory(thirdparty/Sophus)
-
+add_subdirectory(thirdparty/DBoW2)
 # Build spdlog from thirdparty
 set(SPDLOG_BUILD_EXAMPLES OFF CACHE BOOL "Build spdlog examples" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "Build spdlog tests" FORCE)
@@ -63,6 +63,7 @@ include_directories(src)
 include_directories(thirdparty/pangolin/include)
 include_directories(${CMAKE_BINARY_DIR}/thirdparty/pangolin/include)
 include_directories(thirdparty/Sophus)
+include_directories(thirdparty/DBoW2/include)
 include_directories(thirdparty/spdlog/include)
 include_directories(thirdparty/ceres-solver/include)
 include_directories(${CMAKE_BINARY_DIR}/thirdparty/ceres-solver/include)
@@ -86,6 +87,7 @@ add_executable(euroc_stereo app/euroc_stereo.cpp
     src/processing/FeatureTracker.cpp
     src/processing/Optimizer.cpp
     src/processing/Estimator.cpp
+    src/processing/LoopClosureDetection.cpp
     src/processing/IMUHandler.cpp
     src/optimization/Factors.cpp
     src/optimization/Parameters.cpp
@@ -104,6 +106,7 @@ add_executable(tum_stereo app/tum_stereo.cpp
     src/processing/FeatureTracker.cpp
     src/processing/Optimizer.cpp
     src/processing/Estimator.cpp
+    src/processing/LoopClosureDetection.cpp
     src/processing/IMUHandler.cpp
     src/optimization/Factors.cpp
     src/optimization/Parameters.cpp
@@ -122,6 +125,7 @@ add_executable(rgbd_example app/rgbd_example.cpp
     src/processing/FeatureTracker.cpp
     src/processing/Optimizer.cpp
     src/processing/Estimator.cpp
+    src/processing/LoopClosureDetection.cpp
     src/processing/IMUHandler.cpp
     src/optimization/Factors.cpp
     src/optimization/Parameters.cpp
@@ -133,6 +137,7 @@ add_executable(rgbd_example app/rgbd_example.cpp
 
 # Link libraries
 target_link_libraries(euroc_stereo 
+    DBoW2
     ${OpenCV_LIBS} 
     yaml-cpp 
     OpenGL::GL 
@@ -151,6 +156,7 @@ target_link_libraries(euroc_stereo
 
 target_link_libraries(tum_stereo 
     ${OpenCV_LIBS} 
+    DBoW2
     yaml-cpp 
     OpenGL::GL 
     GLEW::GLEW
@@ -167,7 +173,8 @@ target_link_libraries(tum_stereo
 )
 
 target_link_libraries(rgbd_example 
-    ${OpenCV_LIBS} 
+    ${OpenCV_LIBS}
+    DBoW2 
     yaml-cpp 
     OpenGL::GL 
     GLEW::GLEW

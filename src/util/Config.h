@@ -72,7 +72,20 @@ namespace lightweight_vio
         // Camera Model Parameters
         CameraModel m_camera_model = CameraModel::PINHOLE;
         CameraType m_camera_type = CameraType::STEREO;  // ⭐ Default: STEREO
-
+        bool loop_closure_enabled() const { return m_loop_closure_enable; }
+        const std::string& get_orb_vocabulary_path() const { return m_orb_vocabulary_path; }
+        int get_orb_features() const { return m_orb_features; }
+        float get_orb_scale_factor() const { return m_orb_scale_factor; }
+        int get_orb_levels() const { return m_orb_levels; }
+        int get_orb_edge_threshold() const { return m_orb_edge_threshold; }
+        int get_orb_first_level() const { return m_orb_first_level; }
+        int get_orb_wta_k() const { return m_orb_wta_k; }
+        int get_orb_patch_size() const { return m_orb_patch_size; }
+        int get_orb_fast_threshold() const { return m_orb_fast_threshold; }
+        
+        float get_loop_closure_similarity_threshold() const { return m_loop_closure_similarity_threshold; }
+        int get_min_loop_interval_frames() const { return m_min_loop_interval_frames; }
+        int get_max_loop_database_size() const { return m_max_loop_database_size; }
         // Feature Detection Parameters
         int m_max_features = 150;
         double m_quality_level = 0.01;
@@ -201,6 +214,20 @@ namespace lightweight_vio
         float m_rgbd_vis_min_depth = 0.3f;             // Minimum depth for heatmap visualization (clamp to red below this)
         float m_rgbd_vis_max_depth = 20.0f;            // Maximum depth for heatmap visualization (clamp to blue above this)
 
+        bool m_loop_closure_enable = false;
+        std::string m_orb_vocabulary_path = "/home/astik/lightweight_vio_ros2_wrapper/src/vio_ros_wrapper/vocabulary/ORBvoc.txt";
+        int m_orb_features = 1000;
+        float m_orb_scale_factor = 1.2f;
+        int m_orb_levels = 8;
+        int m_orb_edge_threshold = 31;
+        int m_orb_first_level = 0;
+        int m_orb_wta_k = 2;
+        int m_orb_patch_size = 31;
+        int m_orb_fast_threshold = 20;
+
+        float m_loop_closure_similarity_threshold = 0.015;
+        int m_min_loop_interval_frames = 30;
+        int m_max_loop_database_size = 500;
     private:
         Config() = default;
 

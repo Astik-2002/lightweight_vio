@@ -21,11 +21,11 @@
 #include <queue>
 #include <opencv2/opencv.hpp>
 #include <Eigen/Dense>
-// Forward declarations
 
 
 namespace lightweight_vio {
     class Frame;
+    class LoopClosureDetector;
     class MapPoint;
     class FeatureTracker;
     class IMUHandler;
@@ -146,8 +146,11 @@ public:
      */
     const std::vector<std::shared_ptr<Frame>>& get_keyframes() const { return m_keyframes; }
     
+    /** 
+     * @brief Initiates PGO when loop closure is detected
+    */
+    void handleLoopClosure(int current_id, int candidate_id, Eigen::Matrix4f relative_pose);
 
-   
     /**
      * @brief Get all keyframes (thread-safe copy)
      * @return Copy of keyframes vector
@@ -205,7 +208,8 @@ private:
     std::unique_ptr<SlidingWindowOptimizer> m_sliding_window_optimizer;
     std::unique_ptr<IMUHandler> m_imu_handler;  // IMU processing and preintegration
     std::unique_ptr<InertialOptimizer> m_inertial_optimizer;  // VIO optimization
-    
+    std::unique_ptr<LoopClosureDetector> m_loop_closure_detector; // Loop Closure Detection
+    bool m_loop_closure_enabled;
     // State
     std::shared_ptr<Frame> m_current_frame;
     std::shared_ptr<Frame> m_previous_frame;

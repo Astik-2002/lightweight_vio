@@ -420,7 +420,40 @@ bool Config::load(const std::string& config_file) {
                         m_rgbd_uncertainty_a, m_rgbd_uncertainty_b, m_rgbd_uncertainty_c);
         }
     }
-    
+    cv::FileNode loop_closure = fs["loop_closure"];
+    if (!loop_closure.empty()) {
+        m_loop_closure_enable = (bool)(int)loop_closure["enable"];
+        
+        // ORB Vocabulary path
+        if (!loop_closure["orb_vocabulary_path"].empty()) {
+            m_orb_vocabulary_path = (std::string)loop_closure["orb_vocabulary_path"];
+        }
+        
+        // ORB Feature Extraction Parameters
+        m_orb_features = (int)loop_closure["orb_features"];
+        m_orb_scale_factor = (float)(double)loop_closure["orb_scale_factor"];
+        m_orb_levels = (int)loop_closure["orb_levels"];
+        m_orb_edge_threshold = (int)loop_closure["orb_edge_threshold"];
+        m_orb_first_level = (int)loop_closure["orb_first_level"];
+        m_orb_wta_k = (int)loop_closure["orb_wta_k"];
+        m_orb_patch_size = (int)loop_closure["orb_patch_size"];
+        m_orb_fast_threshold = (int)loop_closure["orb_fast_threshold"];
+        
+        // Loop Detection Parameters
+        m_loop_closure_similarity_threshold = (float)(double)loop_closure["similarity_threshold"];
+        m_min_loop_interval_frames = (int)loop_closure["min_loop_interval_frames"];
+        m_max_loop_database_size = (int)loop_closure["max_database_size"];
+        
+        if (m_enable_debug_output) {
+            spdlog::info("[CONFIG] Loop closure parameters loaded:");
+            spdlog::info("  - Enable: {}", m_loop_closure_enable);
+            spdlog::info("  - ORB vocabulary: {}", m_orb_vocabulary_path);
+            spdlog::info("  - ORB features: {}", m_orb_features);
+            spdlog::info("  - Similarity threshold: {:.3f}", m_loop_closure_similarity_threshold);
+            spdlog::info("  - Min loop interval: {} frames", m_min_loop_interval_frames);
+            spdlog::info("  - Max database size: {} keyframes", m_max_loop_database_size);
+        }
+    }
     fs.release();
     return true;
 }

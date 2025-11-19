@@ -11,6 +11,7 @@
 
 #include "processing/Estimator.h"
 #include "processing/FeatureTracker.h"
+#include "processing/LoopClosureDetection.h"
 #include "processing/IMUHandler.h"
 #include "database/Frame.h"
 #include "database/MapPoint.h"
@@ -41,7 +42,8 @@ Estimator::Estimator()
     , m_initial_gt_pose(Eigen::Matrix4f::Identity())
     , m_Tgw_init(Eigen::Matrix4f::Identity())  // Initialize as Identity
     , m_sliding_window_thread_running(false)
-    , m_keyframes_updated(false) {
+    , m_keyframes_updated(false)
+    ,m_loop_closure_enabled(true) {
     
     // Initialize feature tracker
     m_feature_tracker = std::make_unique<FeatureTracker>();
@@ -68,6 +70,41 @@ Estimator::Estimator()
                      (Config::getInstance().get_camera_model() == CameraModel::PINHOLE) ? "PINHOLE" : "FISHEYE");
         spdlog::info("[ESTIMATOR] Sliding window optimization thread started");
     }
+    m_loop_closure_detector = std::make_unique<LoopClosureDetector>();
+    
+    m_loop_closure_detector->setLoopCallback([this](int current_id, int candidate_id, Eigen::Matrix4f relative_pose) {
+        this->handleLoopClosure(current_id, candidate_id, relative_pose);
+    });
+
+    m_loop_closure_detector->start();
+    
+    if (Config::getInstance().m_enable_debug_output) {
+        spdlog::info("[ESTIMATOR] Loop closure detection initialized and started");
+    }
+}
+
+void Estimator::handleLoopClosure(int current_id, int candidate_id, Eigen::Matrix4f relative_pose) {
+    // Print successful loop closure detection
+    spdlog::info("🎯 [LOOP_CLOSURE] ✅ Loop closure detected successfully: Frame {} -> Frame {}", 
+                 current_id, candidate_id);
+    
+    // You can add more sophisticated loop closure handling here:
+    // - Pose graph optimization
+    // - Map merging
+    // - Global bundle adjustment
+    
+    if (Config::getInstance().m_enable_debug_output) {
+        Eigen::Vector3f translation = relative_pose.block<3,1>(0,3);
+        Eigen::Matrix3f rotation = relative_pose.block<3,3>(0,0);
+        Eigen::AngleAxisf angle_axis(rotation);
+        
+        spdlog::info("[LOOP_CLOSURE] Relative pose - Translation: ({:.3f}, {:.3f}, {:.3f}), Rotation: {:.2f}°",
+                    translation.x(), translation.y(), translation.z(),
+                    angle_axis.angle() * 180.0f / M_PI);
+    }
+    
+    // Optional: Trigger global optimization or pose graph optimization
+    // triggerGlobalOptimization(current_id, candidate_id, relative_pose);
 }
 
 Estimator::EstimationResult Estimator::process_rgbd_frame(const cv::Mat& rgb_image, const cv::Mat& depth_map, long long timestamp) {
@@ -1053,6 +1090,10 @@ Estimator::~Estimator() {
         }
         
     }
+    
+    if (m_loop_closure_detector) {
+        m_loop_closure_detector->stop();
+    }
 }
 
 void Estimator::reset() {
@@ -1700,17 +1741,20 @@ void lightweight_vio::Estimator::create_keyframe(std::shared_ptr<Frame> frame) {
         }
     }
 
-
-
-    
     // Store grid coverage of this keyframe for future relative comparisons
     m_last_keyframe_grid_coverage = calculate_grid_coverage_with_map_points(frame);
-    
-
-    
+        
     // Update last keyframe reference
     m_last_keyframe = frame;
     
+    if (m_loop_closure_enabled && m_loop_closure_detector) 
+    {
+        m_loop_closure_detector->addKeyframe(frame);
+        if (Config::getInstance().m_enable_debug_output) {
+            spdlog::debug("[LOOP_CLOSURE] Keyframe {} sent to loop closure detector", 
+                         frame->get_frame_id());
+        }
+    }
     // Notify sliding window optimization thread
     notify_sliding_window_thread();
 }

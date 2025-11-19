@@ -27,7 +27,9 @@ camera:
   border_size: 1              # Border size to exclude from feature detection (pixels)
   
   # RGB camera intrinsics (Gemini default - adjust based on calibration)
-  rgb_intrinsics: [611.4509887695312, 611.4857177734375, 433.2039794921875, 249.4730224609375]  # [fx, fy, cx, cy]
+  # rgb_intrinsics: [611.4509887695312, 611.4857177734375, 433.2039794921875, 249.4730224609375]  # [fx, fy, cx, cy]
+  rgb_intrinsics: [425.8142395019531, 429.23553466796875, 424.67535400390625, 241.74679565429688]  # [fx, fy, cx, cy]
+
   rgb_distortion: [0,0,0,0]  # [k1, k2, p1, p2]
   
   
@@ -112,3 +114,21 @@ uncertainty:
   max_eigenvalue: 1e-1       # Maximum covariance matrix eigenvalue
   min_eigenvalue: 1e-5       # Minimum covariance matrix eigenvalue
 
+loop_closure:
+  enable: true                    # Enable/disable loop closure detection
+  orb_vocabulary_path: "/home/astik/lightweight_vio_ros2_wrapper/src/vio_ros_wrapper/vocabulary/ORBvoc.txt"
+  
+  # ORB Feature Extraction Parameters
+  orb_features: 1000             # Maximum number of ORB features to extract
+  orb_scale_factor: 1.2          # Scale factor between levels in the scale pyramid  
+  orb_levels: 8                  # Number of levels in the scale pyramid
+  orb_edge_threshold: 31         # Size of the border where features are not detected
+  orb_first_level: 0             # Level of pyramid to put source image to
+  orb_wta_k: 2                   # Number of points that produce each element of the oriented BRIEF descriptor
+  orb_patch_size: 31             # Size of the patch used by the oriented BRIEF descriptor
+  orb_fast_threshold: 20         # FAST threshold for corner detection
+  
+  # Loop Detection Parameters
+  similarity_threshold: 0.015    # Minimum similarity score for loop candidate (0-1)
+  min_loop_interval_frames: 30   # Minimum frames between current frame and loop candidate
+  max_database_size: 500         # Maximum number of keyframes in loop closure database
