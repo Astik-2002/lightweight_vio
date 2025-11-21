@@ -21,7 +21,7 @@ LoopClosureDetector::LoopClosureDetector() {
         if (config.loop_closure_enabled() && !config.get_orb_vocabulary_path().empty()) {
             std::cout<<"config.m_orb_vocabulary_path: "<<config.get_orb_vocabulary_path()<<std::endl;
             // CHANGE: Use getter method
-            m_vocabulary->load(config.get_orb_vocabulary_path());
+            m_vocabulary->loadFromTextFile(config.get_orb_vocabulary_path());
             spdlog::info("[LOOP_CLOSURE] Loaded ORB vocabulary from: {}", config.get_orb_vocabulary_path());
         } else {
             if (!config.loop_closure_enabled()) {
