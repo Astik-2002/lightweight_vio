@@ -49,6 +49,17 @@ LoopClosureDetector::~LoopClosureDetector() {
     stop();
 }
 
+cv::Mat LoopClosureDetector::stackDescriptors(const std::vector<cv::Mat>& vec)
+{
+    if (vec.empty()) return cv::Mat();
+
+    cv::Mat mat(vec.size(), vec[0].cols, vec[0].type());
+    for (size_t i = 0; i < vec.size(); i++) {
+        vec[i].copyTo(mat.row(i));
+    }
+    return mat;
+}
+
 void LoopClosureDetector::start() {
     if (m_thread_running) return;
     
@@ -122,19 +133,31 @@ void LoopClosureDetector::processKeyframe(std::shared_ptr<Frame> keyframe) {
         // Add to DBoW2 database
         DBoW2::BowVector bow_vec;
         m_vocabulary->transform(descriptors, bow_vec);
-        m_database->add(bow_vec);
-        
-        spdlog::debug("[LOOP_CLOSURE] Added keyframe {} to database with {} features", 
+        int db_id = m_database->add(bow_vec);
+        frameId_to_dbId[current_id] = db_id;
+        dbId_to_frameId[db_id] = current_id;
+        spdlog::info("[LOOP_CLOSURE] Added keyframe {} to database with {} features", 
                      current_id, descriptors.size());
     }
     
     // Perform loop closure detection
     int loop_candidate_id = -1;
-    if (detectLoop(keyframe, loop_candidate_id)) {
+    if (detectLoop(keyframe, loop_candidate_id)) 
+    {
         spdlog::info("[LOOP_CLOSURE] Loop candidate detected: {} -> {}", current_id, loop_candidate_id);
         
         // Perform geometric verification
         auto candidate_kf = m_keyframes[loop_candidate_id];
+        if (m_keyframe_descriptors.find(loop_candidate_id) == m_keyframe_descriptors.end()) 
+        {
+            spdlog::error("[LOOP_CLOSURE] Candidate {} was removed from database during processing!", loop_candidate_id);
+            return;
+        }
+        if (m_keyframe_keypoints.find(loop_candidate_id) == m_keyframe_keypoints.end()) 
+        {
+            spdlog::error("[LOOP_CLOSURE] Candidate {} keypoints were removed from database during processing!", loop_candidate_id);
+            return;
+        }
         if (geometricVerification(keyframe, candidate_kf)) {
             spdlog::info("[LOOP_CLOSURE] ✅ Loop confirmed: {} -> {}", current_id, loop_candidate_id);
             
@@ -152,29 +175,42 @@ void LoopClosureDetector::processKeyframe(std::shared_ptr<Frame> keyframe) {
                         current_id, loop_candidate_id);
         }
     }
+    else
+    {
+        spdlog::info("[LOOP_CLOSURE] ❌ loop closure failed for {} -> {}", 
+                        current_id, loop_candidate_id);
+    }
     
     // Manage database size
-    if (m_database->size() > m_max_database_size) {
-        // Remove oldest keyframe
+    if (m_database->size() > m_max_database_size) 
+    {
         int oldest_id = m_keyframes.begin()->first;
-        m_database->clear(); // Note: DBoW2 doesn't support removal, so we clear and rebuild
-        
-        // Rebuild database without oldest keyframe
+
+        // Clear DB and maps
+        m_database->clear();
+        frameId_to_dbId.clear();
+        dbId_to_frameId.clear();
+
+        // Rebuild without oldest keyframe
         for (auto& [kf_id, kf] : m_keyframes) {
-            if (kf_id != oldest_id) {
-                DBoW2::BowVector bow_vec;
-                m_vocabulary->transform(m_keyframe_descriptors[kf_id], bow_vec);
-                m_database->add(bow_vec);
-            }
+            if (kf_id == oldest_id) continue;
+
+            DBoW2::BowVector bow_vec;
+            m_vocabulary->transform(m_keyframe_descriptors[kf_id], bow_vec);
+            int new_db_id = m_database->add(bow_vec);
+
+            frameId_to_dbId[kf_id] = new_db_id;
+            dbId_to_frameId[new_db_id] = kf_id;
         }
-        
-        // Remove from storage
+
+        // Remove oldest from caches
         m_keyframes.erase(oldest_id);
         m_keyframe_descriptors.erase(oldest_id);
         m_keyframe_keypoints.erase(oldest_id);
-        
-        spdlog::debug("[LOOP_CLOSURE] Removed oldest keyframe {} from database", oldest_id);
+
+        spdlog::debug("[LOOP_CLOSURE] Removed and rebuilt without keyframe {}", oldest_id);
     }
+
 }
 
 void LoopClosureDetector::extractORBFeatures(std::shared_ptr<Frame> frame, std::vector<cv::Mat>& descriptors) {
@@ -201,17 +237,6 @@ void LoopClosureDetector::extractORBFeatures(std::shared_ptr<Frame> frame, std::
     } else {
         gray_image = image;
     }
-    
-    // Create ORB detector
-    // auto orb = cv::ORB::create(config.m_orb_features, 
-    //                           config.m_orb_scale_factor, 
-    //                           config.m_orb_levels,
-    //                           config.m_orb_edge_threshold,
-    //                           config.m_orb_first_level,
-    //                           config.m_orb_wta_k,
-    //                           cv::ORB::HARRIS_SCORE,
-    //                           config.m_orb_patch_size,
-    //                           config.m_orb_fast_threshold);
     auto orb = cv::ORB::create(config.get_orb_features(), 
                               config.get_orb_scale_factor(), 
                               config.get_orb_levels(),
@@ -232,6 +257,10 @@ void LoopClosureDetector::extractORBFeatures(std::shared_ptr<Frame> frame, std::
         spdlog::warn("[LOOP_CLOSURE] No ORB features detected");
         return;
     }
+    else
+    {
+        spdlog::info("[LOOP_CLOSURE] {} ORB features detected for keyframe {}", orb_descriptors.rows, frame->get_frame_id());
+    }
     
     // Convert descriptors to DBoW2 format
     descriptors.clear();
@@ -241,54 +270,56 @@ void LoopClosureDetector::extractORBFeatures(std::shared_ptr<Frame> frame, std::
     
     // Store keypoints for geometric verification
     m_keyframe_keypoints[frame->get_frame_id()] = keypoints;
-    
-    spdlog::debug("[LOOP_CLOSURE] Extracted {} ORB features for keyframe {}", 
-                 descriptors.size(), frame->get_frame_id());
+    spdlog::info("[LOOP_CLOSURE] Stored {} keypoints for frame {}", 
+                 keypoints.size(), frame->get_frame_id());
 }
 
 bool LoopClosureDetector::detectLoop(std::shared_ptr<Frame> current_kf, int& loop_candidate_id) {
     int current_id = current_kf->get_frame_id();
-    
-    // Skip if too recent
-    if (!m_keyframes.empty()) {
-        // int latest_id = m_keyframes.rbegin()->first;
-        int latest_id = std::max_element(
-            m_keyframes.begin(), m_keyframes.end(),
-            [](const auto &a, const auto &b) {
-                return a.first < b.first;
-            }
-        )->first;
-        if (current_id - latest_id < m_min_loop_interval) {
-            return false;
-        }
-    }
-    
-    // Query database
+    spdlog::info("[LOOP_CLOSURE] Loop candidate received in detect loop function: {}", current_id);
+
+    // Query database FIRST
     DBoW2::QueryResults results;
     m_database->query(m_keyframe_descriptors[current_id], results, m_max_database_size);
     
     if (results.empty()) {
+        spdlog::info("Keyframe {} returned with 0 loop closure candidates from DBoW2", current_id);
         return false;
     }
-    
-    // Filter results
-    for (const auto& result : results) {
-        int candidate_id = result.Id;
-        
-        // Skip if too close in time
-        if (abs(current_id - candidate_id) < m_min_loop_interval) {
+
+    for (const auto& result : results) 
+    {
+        int candidate_db_id = result.Id;
+        int candidate_frame_id = dbId_to_frameId[candidate_db_id];
+
+        long long t_curr_ns = current_kf->get_timestamp();
+        long long t_cand_ns = m_keyframes[candidate_frame_id]->get_timestamp();
+
+        double dt = std::abs((t_curr_ns - t_cand_ns) * 1e-9);   // nanoseconds → seconds
+        double temporal_threshold = 0.5;
+        // TEMPORAL RULE BASED ON TIMESTAMP
+        if (dt < temporal_threshold) {
+            spdlog::info("[LOOP_CLOSURE] Skipping candidate {} - timestamp diff {:.3f} < {:.3f} sec",
+                        candidate_frame_id, dt, temporal_threshold);
             continue;
         }
-        
-        // Check similarity score
+        else
+        {
+            spdlog::info("[LOOP_CLOSURE] current {}->candidate {} - similarity_score: {}", current_id,
+            candidate_frame_id, result.Score);
+ 
+        }
+
+        // SIMILARITY CHECK
         if (result.Score > m_similarity_threshold) {
-            loop_candidate_id = candidate_id;
-            spdlog::debug("[LOOP_CLOSURE] Candidate {} found with score: {}", 
-                         candidate_id, result.Score);
+            loop_candidate_id = candidate_frame_id;
+            spdlog::info("[LOOP_CLOSURE] Candidate {} found with score: {}", 
+                        candidate_frame_id, result.Score);
             return true;
         }
     }
     
+    spdlog::info("[LOOP_CLOSURE] No suitable candidates found for keyframe {}", current_id);
     return false;
 }
 
@@ -296,6 +327,12 @@ bool LoopClosureDetector::geometricVerification(std::shared_ptr<Frame> current_k
     int current_id = current_kf->get_frame_id();
     int candidate_id = candidate_kf->get_frame_id();
     
+    if (m_keyframe_descriptors.find(current_id) == m_keyframe_descriptors.end() || m_keyframe_descriptors.find(candidate_id) == m_keyframe_descriptors.end()) 
+    {
+        spdlog::error("[LOOP_CLOSURE] Missing descriptors for geometric verification: {} -> {}", 
+                     current_id, candidate_id);
+        return false;
+    }
     // Get features and keypoints
     auto& current_descriptors = m_keyframe_descriptors[current_id];
     auto& candidate_descriptors = m_keyframe_descriptors[candidate_id];
@@ -308,9 +345,16 @@ bool LoopClosureDetector::geometricVerification(std::shared_ptr<Frame> current_k
     
     // Feature matching
     cv::BFMatcher matcher(cv::NORM_HAMMING);
+    cv::Mat curr_desc_mat = stackDescriptors(current_descriptors);
+    cv::Mat cand_desc_mat = stackDescriptors(candidate_descriptors);
+
+    if (curr_desc_mat.empty() || cand_desc_mat.empty()) {
+        spdlog::error("[LOOP_CLOSURE] Empty descriptors during geometric verification");
+        return false;
+    }
+
     std::vector<cv::DMatch> matches;
-    matcher.match(current_descriptors, candidate_descriptors, matches);
-    
+    matcher.match(curr_desc_mat, cand_desc_mat, matches);
     // Filter matches by distance
     double min_dist = std::min_element(matches.begin(), matches.end(),
         [](const cv::DMatch& m1, const cv::DMatch& m2) { return m1.distance < m2.distance; })->distance;

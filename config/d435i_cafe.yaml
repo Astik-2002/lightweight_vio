@@ -129,6 +129,14 @@ loop_closure:
   orb_fast_threshold: 20         # FAST threshold for corner detection
   
   # Loop Detection Parameters
-  similarity_threshold: 0.015    # Minimum similarity score for loop candidate (0-1)
-  min_loop_interval_frames: 30   # Minimum frames between current frame and loop candidate
-  max_database_size: 500         # Maximum number of keyframes in loop closure database
+  similarity_threshold: 0.05    # Minimum similarity score for loop candidate (0-1)
+  min_loop_interval_frames: 50   # Minimum frames between current frame and loop candidate
+  max_database_size: 10000         # Maximum number of keyframes in loop closure database
+
+pose_graph_optimization:
+  enable: true
+  max_iterations: 10
+  odometry_information_scale: 1.0
+  loop_closure_information_scale: 5.0
+  use_robust_kernel: true
+  robust_kernel_delta: 1.0

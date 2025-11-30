@@ -26,6 +26,7 @@
 namespace lightweight_vio {
     class Frame;
     class LoopClosureDetector;
+    class PoseGraphOptimizer;
     class MapPoint;
     class FeatureTracker;
     class IMUHandler;
@@ -37,9 +38,16 @@ namespace lightweight_vio {
     struct InertialOptimizationResult;  // Add forward declaration
     struct IMUData;
     struct IMUPreintegration;
+    struct PoseGraph;
 }
 
 namespace lightweight_vio {
+
+struct PendingLoop {
+    int current_id;
+    int candidate_id;
+    Eigen::Matrix4f relative_pose;
+};
 
 /**
  * @brief Main VIO estimator class that handles the complete pipeline
@@ -209,7 +217,12 @@ private:
     std::unique_ptr<IMUHandler> m_imu_handler;  // IMU processing and preintegration
     std::unique_ptr<InertialOptimizer> m_inertial_optimizer;  // VIO optimization
     std::unique_ptr<LoopClosureDetector> m_loop_closure_detector; // Loop Closure Detection
+    std::unique_ptr<PoseGraphOptimizer> m_pose_graph_optimizer; // Pose graph optimizer
     bool m_loop_closure_enabled;
+    bool m_pgo_enabled_;
+    std::atomic<bool> m_pgo_optimization_running_{false};
+
+    std::vector<PendingLoop> m_pending_loops;
     // State
     std::shared_ptr<Frame> m_current_frame;
     std::shared_ptr<Frame> m_previous_frame;
@@ -456,6 +469,36 @@ private:
      * @param frame Frame to compute reprojection errors for
      */
     void compute_reprojection_error_statistics(std::shared_ptr<Frame> frame);
+
+    void applyPGOUpdates();
+    
+    /**
+     * @brief Correct map points after PGO pose updates
+     */
+    void correctMapPointsAfterPGO();
+    
+    /**
+     * @brief Retries adding loop closure edges 
+    */
+    void retryPendingLoops();
+
+    /**
+     * @brief Update keyframe poses with optimized poses from PGO
+     */
+    void updateKeyframePosesWithPGO();
+    
+    void logPGOCorrectionStatistics();
+
+    Eigen::Vector3f computeRobustMean(const std::vector<Eigen::Vector3f>& points);
+
+    /**
+     * @brief Get PGO status information
+     */
+    bool isPGOEnabled() const;
+    size_t getPGONodeCount() const;
+    size_t getPGOEdgeCount() const;
+    Eigen::Matrix4f getCurrentOptimizedPose() const;
+
 };
 
 } // namespace lightweight_vio

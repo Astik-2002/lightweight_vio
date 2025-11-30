@@ -22,7 +22,7 @@ public:
 
     // Set callback for detected loops
     void setLoopCallback(std::function<void(int, int, Eigen::Matrix4f)> callback);
-
+    cv::Mat stackDescriptors(const std::vector<cv::Mat>& vec);
     // Thread management
     void start();
     void stop();
@@ -52,6 +52,9 @@ private:
     int m_min_loop_interval;
     int m_max_database_size;
     
+    std::unordered_map<int, int> frameId_to_dbId;
+    std::unordered_map<int, int> dbId_to_frameId;
+
     // Callback for loop detection
     std::function<void(int, int, Eigen::Matrix4f)> m_loop_callback;
     

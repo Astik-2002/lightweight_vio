@@ -472,74 +472,6 @@ bool MapPoint::has_world_uncertainty() const {
     std::lock_guard<std::mutex> lock(m_data_mutex);
     return m_has_uncertainty;
 }
-
-// void MapPoint::update_world_uncertainty_with_observations()
-// {
-
-//     auto observations = get_observations();
-
-//     clear_all_world_uncertainties();
-
-//     // Information Matrix 방식으로 결합 
-//     Eigen::Matrix3f combined_information = Eigen::Matrix3f::Zero();
-//     Eigen::Matrix3f combined_information_min = Eigen::Matrix3f::Zero();
-//     float count = 0.0f;
-
-//     for (const auto& obs : observations) {
-//         if (auto frame = obs.frame.lock()) {
-//             // 각 observation에서 world uncertainty 계산
-
-//             // reprojection error 계산
-//             Eigen::Vector3f world_pos = get_position();
-//             Eigen::Matrix4f T_cw = frame->get_Twc().inverse();
-//             Eigen::Vector3f camera_pos = (T_cw * world_pos.homogeneous()).head<3>();
-//             float u_proj = frame->get_fx() * (camera_pos.x() / camera_pos.z()) + frame->get_cx();
-//             float v_proj = frame->get_fy() * (camera_pos.y() / camera_pos.z()) + frame->get_cy();
-//             int feature_index = obs.feature_index;
-//             auto feature = frame->get_feature(feature_index);
-                
-//             if (!feature) continue;
-            
-//             cv::Point2f undistorted_coord = feature->get_undistorted_coord();
-//             float u_obs = undistorted_coord.x;
-//             float v_obs = undistorted_coord.y;
-
-//             float reproj_error = std::sqrt((u_proj - u_obs)*(u_proj - u_obs) + (v_proj - v_obs)*(v_proj - v_obs));
-
-//             float min_reproj_error = Config::getInstance().m_min_reprojection_error;
-
-//             reproj_error = std::max(reproj_error, min_reproj_error);
-
-
-//             Eigen::Matrix2f pixel_uncertainty = Eigen::Matrix2f::Identity() * (reproj_error * reproj_error);
-//             Eigen::Matrix2f pixel_uncertainty_min = Eigen::Matrix2f::Identity() * (min_reproj_error * min_reproj_error);
-
-
-//             // spdlog::info("Reprojection error x y : {} {}", abs(u_proj - u_obs), abs(v_proj - v_obs));
-//             // spdlog::info("Pixel uncertainty: {} {}", pixel_uncertainty(0,0), pixel_uncertainty(1,1));
-
-
-//             Eigen::Matrix3f world_uncertainty_i = initial_unproject_pixel_uncertainty_to_world(pixel_uncertainty, frame);
-//             Eigen::Matrix3f world_uncertainty_i_min = initial_unproject_pixel_uncertainty_to_world(pixel_uncertainty_min, frame);
-
-           
-//             // Covariance → Information Matrix (Σ^(-1))
-//             Eigen::Matrix3f information_i = world_uncertainty_i.inverse();
-//             Eigen::Matrix3f information_i_min = world_uncertainty_i_min.inverse();
-            
-//             // Information Matrix들을 더함
-//             combined_information += information_i;
-//             combined_information_min += information_i_min;
-//         }
-//     }
-
-//     Eigen::Matrix3f world_uncertainty_combined = combined_information.inverse();
-//     Eigen::Matrix3f world_uncertainty_combined_min = combined_information_min.inverse();
-//     set_world_uncertainty(world_uncertainty_combined);
-//     set_min_world_uncertainty(world_uncertainty_combined_min);
-
-// }
-
 std::vector<Eigen::Vector3f> MapPoint::compute_multi_view_positions() const {
     std::vector<Eigen::Vector3f> positions;
     std::lock_guard<std::mutex> lock(m_data_mutex);
@@ -637,35 +569,9 @@ void MapPoint::update_uncertainty() {
                     modified = true;
                 }
             }
-
-
-            
-            // // Apply maximum eigenvalue constraint
-            // if (max_eigenvalue > max_allowed) {
-            //     float scale = max_allowed / max_eigenvalue;
-            //     eigenvalues *= scale;  // Scale eigenvalues
-            //     modified = true;
-            // }
-            
-            // // Apply minimum eigenvalue constraint
-            // float min_eigenvalue = eigenvalues.minCoeff();
-            // if (min_eigenvalue < min_allowed) {
-            //     float scale = min_allowed / min_eigenvalue;
-            //     eigenvalues *= scale;  // Scale eigenvalues up
-            //     modified = true;
-            // }
-            
-            // Reconstruct covariance matrix if modified
-            if (modified) {
-
-
-                // spdlog::info("Changing eigenvalues for MapPoint {}: [{:.6f}, {:.6f}, {:.6f}] -> [{:.6f}, {:.6f}, {:.6f}]",
-                //              m_id,
-                //              solver.eigenvalues()(0), solver.eigenvalues()(1), solver.eigenvalues()(2),
-                //              eigenvalues(0), eigenvalues(1), eigenvalues(2));
-                observation_covariance = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
-                
-                // Verify scaling worked
+            if (modified) 
+            {
+                observation_covariance = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();                
                 Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> solver_after(observation_covariance);
                 if (solver_after.info() == Eigen::Success) {
                     float new_max_eigenvalue = solver_after.eigenvalues().maxCoeff();
@@ -678,17 +584,9 @@ void MapPoint::update_uncertainty() {
     } 
     else
     {
-        // For insufficient data, use small default covariance
         Eigen::Matrix3f default_covariance = Eigen::Matrix3f::Identity() * Config::getInstance().m_uncertainty_max_eigenvalue;
         set_world_uncertainty(default_covariance);
     }
-    
-    // else if (m_observation_positions.size() >= 1) {
-    //     // For insufficient data, use small default covariance
-    //     // Eigen::Matrix3f default_covariance = Eigen::Matrix3f::Identity() * 0.01f;
-    //     // set_world_uncertainty(default_covariance);
-    // } 
-    // No need to handle else case since world uncertainty already exists
 }
 
 const std::vector<Eigen::Vector3f>& MapPoint::get_observation_positions() const {
@@ -704,11 +602,8 @@ bool MapPoint::has_valid_observation_positions() const {
 Eigen::Matrix3f MapPoint::compute_covariance_from_positions(const std::vector<Eigen::Vector3f>& positions, 
                                                            const Eigen::Vector3f& mean_position) const {
     if (positions.size() < 3) {
-        // Return identity matrix for insufficient data
         return Eigen::Matrix3f::Identity() * 0.01f;  // Small default covariance
-    }
-    
-    // Compute covariance matrix - calculate variance for each axis separately
+    }    
     float var_x = 0, var_y = 0, var_z = 0;
     for (const auto& pos : positions) {
         Eigen::Vector3f diff = pos - mean_position;
@@ -717,19 +612,15 @@ Eigen::Matrix3f MapPoint::compute_covariance_from_positions(const std::vector<Ei
         var_z += diff.z() * diff.z();
     }
     
-    // Normalize by (n-1) for sample variance
     float n_minus_1 = static_cast<float>(positions.size() - 1);
     var_x /= n_minus_1;
     var_y /= n_minus_1;
     var_z /= n_minus_1;
     
-    // Create diagonal covariance matrix
     Eigen::Matrix3f covariance = Eigen::Matrix3f::Zero();
     covariance(0,0) = var_x;
     covariance(1,1) = var_y;
-    covariance(2,2) = var_z;
-    
-    // Add small regularization to ensure positive definiteness
+    covariance(2,2) = var_z;    
     covariance += Eigen::Matrix3f::Identity() * 1e-6f;
     
     return covariance;

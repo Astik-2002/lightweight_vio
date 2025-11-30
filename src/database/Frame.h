@@ -324,7 +324,6 @@ private:
     // Feature detection parameters
     double m_quality_level = 0.01;
     double m_min_distance = 30.0;
-
     // IMU data from last frame to current frame
     std::vector<IMUData> m_imu_vec_from_last_frame;
     

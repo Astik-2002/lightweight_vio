@@ -172,6 +172,13 @@ namespace lightweight_vio
 
         // System Mode Parameters
         std::string m_system_mode = "VIO";  // "VO" or "VIO"
+
+        // pgo parameters
+        int m_pgo_max_iterations = 10;
+        double m_pgo_odometry_information_scale = 1.0;
+        double m_pgo_loop_closure_information_scale = 5.0;
+        bool m_pgo_use_robust_kernel = true;
+        double m_pgo_robust_kernel_delta = 1.0;
         
         // Viewer Parameters
         bool m_viewer_enable = false;       // Enable/disable 3D viewer
@@ -215,6 +222,7 @@ namespace lightweight_vio
         float m_rgbd_vis_max_depth = 20.0f;            // Maximum depth for heatmap visualization (clamp to blue above this)
 
         bool m_loop_closure_enable = false;
+        bool m_pose_graph_enable = false;
         std::string m_orb_vocabulary_path = "/home/astik/lightweight_vio_ros2_wrapper/src/vio_ros_wrapper/vocabulary/ORBvoc.txt";
         int m_orb_features = 1000;
         float m_orb_scale_factor = 1.2f;

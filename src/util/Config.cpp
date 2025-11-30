@@ -88,7 +88,41 @@ bool Config::load(const std::string& config_file) {
         m_max_depth = (double)depth["max_depth"];
     }
     
- 
+    
+    // pose graph parameters
+    cv::FileNode pose_graph = fs["pose_graph_optimization"];
+    if (!pose_graph.empty()) {
+        m_pose_graph_enable = (bool)(int)pose_graph["enable"];
+
+        if (pose_graph["max_iterations"].isInt()) {
+            m_pgo_max_iterations = (int)pose_graph["max_iterations"];
+        }
+        if (pose_graph["odometry_information_scale"].isReal()) {
+            m_pgo_odometry_information_scale = (double)pose_graph["odometry_information_scale"];
+        }
+        if (pose_graph["loop_closure_information_scale"].isReal()) {
+            m_pgo_loop_closure_information_scale = (double)pose_graph["loop_closure_information_scale"];
+        }
+        if (pose_graph["use_robust_kernel"].isInt()) {
+            m_pgo_use_robust_kernel = (bool)(int)pose_graph["use_robust_kernel"];
+        }
+        if (pose_graph["robust_kernel_delta"].isReal()) {
+            m_pgo_robust_kernel_delta = (double)pose_graph["robust_kernel_delta"];
+        }
+        
+        if (m_enable_debug_output) {
+            spdlog::info("[CONFIG] Pose Graph Optimization parameters loaded:");
+            spdlog::info("  - Max iterations: {}", m_pgo_max_iterations);
+            spdlog::info("  - Odometry information scale: {:.2f}", m_pgo_odometry_information_scale);
+            spdlog::info("  - Loop closure information scale: {:.2f}", m_pgo_loop_closure_information_scale);
+            spdlog::info("  - Use robust kernel: {}", m_pgo_use_robust_kernel);
+            spdlog::info("  - Robust kernel delta: {:.2f}", m_pgo_robust_kernel_delta);
+        }
+    } else {
+        if (m_enable_debug_output) {
+            spdlog::warn("[CONFIG] Pose Graph Optimization section not found, using defaults");
+        }
+    }
     
     // Keyframe Parameters
     cv::FileNode keyframe_mgmt = fs["keyframe_management"];

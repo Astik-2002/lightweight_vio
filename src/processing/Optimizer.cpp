@@ -393,92 +393,6 @@ namespace lightweight_vio
                 }
             }
         }
-
-        // Print chi2 statistics (commented out to reduce log verbosity)
-        // if (!inlier_chi2_values.empty())
-        // {
-        //     auto inlier_minmax = std::minmax_element(inlier_chi2_values.begin(), inlier_chi2_values.end());
-        //     double inlier_sum = std::accumulate(inlier_chi2_values.begin(), inlier_chi2_values.end(), 0.0);
-        //     double inlier_mean = inlier_sum / inlier_chi2_values.size();
-        //     
-        //     spdlog::info("[CHI2_STATS] Inliers ({}): min={:.3f}, max={:.3f}, mean={:.3f}", 
-        //                 inlier_chi2_values.size(), *inlier_minmax.first, 
-        //                 *inlier_minmax.second, inlier_mean);
-        // }
-
-        // if (!outlier_chi2_values.empty())
-        // {
-        //     auto outlier_minmax = std::minmax_element(outlier_chi2_values.begin(), outlier_chi2_values.end());
-        //     double outlier_sum = std::accumulate(outlier_chi2_values.begin(), outlier_chi2_values.end(), 0.0);
-        //     double outlier_mean = outlier_sum / outlier_chi2_values.size();
-        //     
-        //     spdlog::info("[CHI2_STATS] Outliers ({}): min={:.3f}, max={:.3f}, mean={:.3f}", 
-        //                 outlier_chi2_values.size(), *outlier_minmax.first, 
-        //                 *outlier_minmax.second, outlier_mean);
-        // }
-
-        // // Debug: Print details for some outliers to understand what's wrong
-        // int debug_count = 0;
-        // Eigen::Map<const Eigen::Vector6d> se3_tangent(pose_params[0]);
-        // Sophus::SE3d current_pose = Sophus::SE3d::exp(se3_tangent);
-        
-        // // Convert matrix to string for logging
-        // std::stringstream ss;
-        // ss << current_pose.matrix();
-        // // spdlog::debug("[OUTLIER_DEBUG] Current pose Twb:\n{}", ss.str());
-        
-        // for (size_t i = 0; i < observations.size() && debug_count < 3; ++i)
-        // {
-        //     double chi2_error = observations[i].cost_function->compute_chi_square(pose_params);
-        //     if (chi2_error > chi2_threshold)
-        //     {
-        //         int feature_idx = feature_indices[i];
-        //         auto feature = frame->get_features()[feature_idx];
-        //         auto mp = frame->get_map_points()[feature_idx];
-                
-        //         // Manually project to see what the expected pixel should be
-        //         Eigen::Vector3d world_pos = mp->get_position().cast<double>();
-                
-        //         // Transform to camera coordinates: Pc = Rcw * Pw + tcw
-        //         Eigen::Matrix3d Rwb = current_pose.rotationMatrix();
-        //         Eigen::Vector3d t_wb = current_pose.translation();
-        //         Eigen::Matrix3d Rbw = Rwb.transpose();
-        //         Eigen::Vector3d t_bw = -Rbw * t_wb;
-                
-        //         // Get T_cb (body-to-camera transform) from frame directly - CONSISTENT WITH add_observation
-        //         const Eigen::Matrix4d& T_cb = frame->get_Tcb();
-                
-        //         // Transform to camera coordinates: Pc = T_cb * (Rbw * Pw + t_bw)
-        //         Eigen::Vector3d point_body = Rbw * world_pos + t_bw;
-        //         Eigen::Vector4d point_body_h(point_body.x(), point_body.y(), point_body.z(), 1.0);
-        //         Eigen::Vector4d point_camera_h = T_cb * point_body_h;
-        //         Eigen::Vector3d point_camera = point_camera_h.head<3>();
-                
-        //         // Project to image plane
-        //         double fx, fy, cx, cy;
-        //         fx = frame->get_fx(); fy = frame->get_fy(); cx = frame->get_cx(); cy = frame->get_cy();
-                
-        //         if (point_camera.z() > 0) {
-        //             double u_proj = fx * point_camera.x() / point_camera.z() + cx;
-        //             double v_proj = fy * point_camera.y() / point_camera.z() + cy;
-                    
-        //             // Get undistorted observation using normalized coordinates (consistent with CREATE_MP)
-        //             cv::Point2f undistorted_pixel = feature->get_undistorted_coord();
-        //             double undist_u = undistorted_pixel.x;
-        //             double undist_v = undistorted_pixel.y;
-
-        //             auto map_point = frame->get_map_point(feature_idx);
-        //             // spdlog::debug("[OUTLIER_DEBUG] Feature {}: chi2={:.3f}, observed_undist=({:.1f},{:.1f}), projected=({:.1f},{:.1f}), world=({:.2f},{:.2f},{:.2f})", 
-        //             //              feature_idx, chi2_error, undist_u, undist_v,
-        //             //              u_proj, v_proj, world_pos.x(), world_pos.y(), world_pos.z());
-        //         } else {
-        //             // spdlog::debug("[OUTLIER_DEBUG] Feature {}: chi2={:.3f}, BEHIND_CAMERA: z={:.2f}", 
-        //             //              feature_idx, chi2_error, point_camera.z());
-        //         }
-        //         debug_count++;
-        //     }
-        // }
-
         return num_inliers;
     }
 
@@ -1056,44 +970,6 @@ std::vector<BAObservationInfo> SlidingWindowOptimizer::setup_optimization_proble
         }
     }
 
-    // // Print error statistics
-    // if (!reprojection_errors.empty() && !predicted_errors.empty()) {
-    //     // Calculate statistics for reprojection errors
-    //     std::sort(reprojection_errors.begin(), reprojection_errors.end());
-    //     double reproj_min = reprojection_errors.front();
-    //     double reproj_max = reprojection_errors.back();
-    //     double reproj_mean = std::accumulate(reprojection_errors.begin(), reprojection_errors.end(), 0.0) / reprojection_errors.size();
-    //     double reproj_median = reprojection_errors[reprojection_errors.size() / 2];
-        
-    //     // Calculate statistics for predicted errors
-    //     std::sort(predicted_errors.begin(), predicted_errors.end());
-    //     double pred_min = predicted_errors.front();
-    //     double pred_max = predicted_errors.back();
-    //     double pred_mean = std::accumulate(predicted_errors.begin(), predicted_errors.end(), 0.0) / predicted_errors.size();
-    //     double pred_median = predicted_errors[predicted_errors.size() / 2];
-        
-    //     spdlog::info("[SlidingWindow] Error Statistics ({} observations):", reprojection_errors.size());
-    //     spdlog::info("  Reprojection - Min: {:.3f}, Max: {:.3f}, Mean: {:.3f}, Median: {:.3f}", 
-    //                  reproj_min, reproj_max, reproj_mean, reproj_median);
-    //     spdlog::info("  Predicted    - Min: {:.3f}, Max: {:.3f}, Mean: {:.3f}, Median: {:.3f}", 
-    //                  pred_min, pred_max, pred_mean, pred_median);
-    //     spdlog::info("  Mean Ratio (Reproj/Pred): {:.3f}", reproj_mean / pred_mean);
-    // }
-
-
-    // spdlog::info("Min Max Mean of sqrt information x : {}, {}, {}", 
-    //               *std::min_element(m_sba_info_x_sqrt.begin(), m_sba_info_x_sqrt.end()),
-    //               *std::max_element(m_sba_info_x_sqrt.begin(), m_sba_info_x_sqrt.end()),
-    //               std::accumulate(m_sba_info_x_sqrt.begin(), m_sba_info_x_sqrt.end(), 0.0) / m_sba_info_x_sqrt.size());
-
-    // spdlog::info("Min Max Mean of sqrt information y : {}, {}, {}", 
-    //               *std::min_element(m_sba_info_y_sqrt.begin(), m_sba_info_y_sqrt.end()),
-    //               *std::max_element(m_sba_info_y_sqrt.begin(), m_sba_info_y_sqrt.end()),
-    //               std::accumulate(m_sba_info_y_sqrt.begin(), m_sba_info_y_sqrt.end(), 0.0) / m_sba_info_y_sqrt.size());
-
-    // spdlog::info("[SlidingWindowOptimizer] Setup problem: {} keyframes, {} map points, {} observations",
-    //             keyframes.size(), map_points.size(), observations.size());
-    
     return observations;
 }
 
@@ -1357,18 +1233,8 @@ void SlidingWindowOptimizer::update_optimized_values(
             // map_point->update_uncertainty();
         }
 
-        // if (Config::getInstance().m_uncertainty_enable && uncertainty_updates > 0) {
-        //     auto uncertainty_end = std::chrono::high_resolution_clock::now();
-        //     auto uncertainty_duration = std::chrono::duration_cast<std::chrono::microseconds>(uncertainty_end - uncertainty_start);
-        //     double avg_time_per_update = static_cast<double>(uncertainty_duration.count()) / uncertainty_updates;
-
-        //     spdlog::info("[UNCERTAINTY_TIMING] Updated {} MapPoints uncertainty in {:.3f}ms (avg: {:.3f}μs per point)",
-        //                 uncertainty_updates, uncertainty_duration.count() / 1000.0, avg_time_per_update);
-        // }
     }
     
-    // spdlog::info("[UPDATE] Updated {} keyframes and {} map points", 
-    //             updated_keyframes, updated_map_points);
 }
 
 ceres::Solver::Options SlidingWindowOptimizer::setup_solver_options(int max_iter) const {

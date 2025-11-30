@@ -22,6 +22,18 @@ find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(Threads REQUIRED)
 
+# find_package(g2o REQUIRED)
+set(G2O_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/g2o)
+set(G2O_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(G2O_BUILD_APPS OFF CACHE BOOL "" FORCE)
+set(G2O_BUILD_UNITTESTS OFF CACHE BOOL "" FORCE)
+set(G2O_USE_OPENGL OFF CACHE BOOL "" FORCE)
+set(G2O_USE_CHOLMOD OFF CACHE BOOL "" FORCE)   # optional
+
+add_subdirectory(thirdparty/g2o)
+include_directories(thirdparty/g2o)
+include_directories(${CMAKE_BINARY_DIR}/thirdparty/g2o)
+
 # Build Pangolin from thirdparty
 set(BUILD_PANGOLIN_EXAMPLES OFF CACHE BOOL "Build Pangolin examples" FORCE)
 set(BUILD_PANGOLIN_TESTS OFF CACHE BOOL "Build Pangolin tests" FORCE)
@@ -95,6 +107,8 @@ add_executable(euroc_stereo app/euroc_stereo.cpp
     src/util/EurocUtils.cpp
     src/util/StringUtils.cpp
     src/viewer/PangolinViewer.cpp
+    src/processing/backward.cpp
+    src/processing/PoseGraphOptimizer.cpp
 )
 
 # Add TUM stereo pipeline (Fisheye support)
@@ -114,6 +128,8 @@ add_executable(tum_stereo app/tum_stereo.cpp
     src/util/TUMUtils.cpp
     src/util/StringUtils.cpp
     src/viewer/PangolinViewer.cpp
+    src/processing/backward.cpp
+    src/processing/PoseGraphOptimizer.cpp
 )
 
 # Add RGBD pipeline (VO mode)
@@ -132,12 +148,20 @@ add_executable(rgbd_example app/rgbd_example.cpp
     src/util/Config.cpp
     src/util/StringUtils.cpp
     src/viewer/PangolinViewer.cpp
+    src/processing/backward.cpp
+    src/processing/PoseGraphOptimizer.cpp
 )
 
 
 # Link libraries
 target_link_libraries(euroc_stereo 
     DBoW2
+    g2o_core
+    g2o_stuff
+    g2o_types_sba
+    g2o_types_slam3d
+    g2o_solver_csparse
+    g2o_solver_dense
     ${OpenCV_LIBS} 
     yaml-cpp 
     OpenGL::GL 
@@ -156,6 +180,12 @@ target_link_libraries(euroc_stereo
 
 target_link_libraries(tum_stereo 
     ${OpenCV_LIBS} 
+    g2o_core
+    g2o_stuff
+    g2o_types_sba
+    g2o_types_slam3d
+    g2o_solver_csparse
+    g2o_solver_dense
     DBoW2
     yaml-cpp 
     OpenGL::GL 
@@ -174,6 +204,12 @@ target_link_libraries(tum_stereo
 
 target_link_libraries(rgbd_example 
     ${OpenCV_LIBS}
+    g2o_core
+    g2o_stuff
+    g2o_types_sba
+    g2o_types_slam3d
+    g2o_solver_csparse
+    g2o_solver_dense
     DBoW2 
     yaml-cpp 
     OpenGL::GL 
