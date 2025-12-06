@@ -16,6 +16,9 @@
 #include <ceres/ceres.h>
 #include <Eigen/Dense>
 #include <sophus/se3.hpp>
+#include <opencv2/core.hpp>
+#include <opencv2/features2d.hpp>   // for cv::DMatch, cv::KeyPoint
+#include <vector>
 
 // Forward declarations
 namespace lightweight_vio {
@@ -268,6 +271,14 @@ struct BAObservationInfo {
  */
 class SlidingWindowOptimizer {
 public:
+
+    static bool computeRelativePose(
+        const std::shared_ptr<Frame>& frame_i,
+        const std::shared_ptr<Frame>& frame_j,
+        const std::vector<cv::DMatch>& matches,
+        const std::vector<cv::KeyPoint>& kpts_i,
+        const std::vector<cv::KeyPoint>& kpts_j,
+        Eigen::Matrix4f &T_i_j_refined);
     /**
      * @brief Constructor
      * @param window_size Maximum number of keyframes in sliding window

@@ -99,6 +99,7 @@ add_executable(euroc_stereo app/euroc_stereo.cpp
     src/processing/FeatureTracker.cpp
     src/processing/Optimizer.cpp
     src/processing/Estimator.cpp
+    src/processing/Estimator_w_mapping.cpp
     src/processing/LoopClosureDetection.cpp
     src/processing/IMUHandler.cpp
     src/optimization/Factors.cpp
@@ -120,6 +121,7 @@ add_executable(tum_stereo app/tum_stereo.cpp
     src/processing/FeatureTracker.cpp
     src/processing/Optimizer.cpp
     src/processing/Estimator.cpp
+    src/processing/Estimator_w_mapping.cpp
     src/processing/LoopClosureDetection.cpp
     src/processing/IMUHandler.cpp
     src/optimization/Factors.cpp

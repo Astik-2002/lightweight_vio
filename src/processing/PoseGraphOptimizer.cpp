@@ -303,8 +303,6 @@ bool PoseGraphOptimizer::optimizeGraph() {
         if (result > 0) {
             // Update poses
             updatePosesFromG2O(vertex_map);
-            updateFramePoses();
-            correctMapPointsAfterOptimization();
             return true;
         } else {
             spdlog::error("[PGO] g2o optimization failed with result: {}", result);
@@ -449,152 +447,64 @@ void PoseGraphOptimizer::addEdgesToG2O(g2o::SparseOptimizer& optimizer,
     spdlog::info("[PGO] Added {} edges to optimizer", edge_count);
 }
 
-// void PoseGraphOptimizer::addEdgesToG2O(g2o::SparseOptimizer& optimizer,
-//                                       const std::map<int, g2o::VertexSE3*>& vertex_map) {
-//     int edge_count = 0;
-    
-//     for (auto& edge : graph_.edges) {
-//         if (!edge.enabled) continue;
-        
-//         // Check if vertices exist
-//         if (vertex_map.count(edge.from_id) == 0 || vertex_map.count(edge.to_id) == 0) {
-//             spdlog::warn("[PGO] Skipping edge {}->{}: vertices not found", 
-//                         edge.from_id, edge.to_id);
-//             continue;
-//         }
-        
-//         auto g2o_edge = new g2o::EdgeSE3();
-//         g2o_edge->setVertex(0, vertex_map.at(edge.from_id));
-//         g2o_edge->setVertex(1, vertex_map.at(edge.to_id));
-        
-//         // Convert measurement
-//         Eigen::Isometry3d measurement = Eigen::Isometry3d::Identity();
-//         measurement.matrix() = edge.measurement.cast<double>();
-//         g2o_edge->setMeasurement(measurement);
-        
-//         g2o_edge->setInformation(edge.information);
-        
-//         // Add robust kernel for loop closures to handle outliers
-//         if (use_robust_kernel_ && edge.type == EdgeType::LOOP_CLOSURE) {
-//             auto robust_kernel = new g2o::RobustKernelHuber();
-//             robust_kernel->setDelta(robust_kernel_delta_);
-//             g2o_edge->setRobustKernel(robust_kernel);
-//         }
-        
-//         optimizer.addEdge(g2o_edge);
-//         edge_count++;
-        
-//         spdlog::debug("[PGO] Added edge {}->{} (type: {})", 
-//                      edge.from_id, edge.to_id, static_cast<int>(edge.type));
-//     }
-    
-//     spdlog::info("[PGO] Added {} edges to optimizer", edge_count);
-// }
-
 void PoseGraphOptimizer::updatePosesFromG2O(const std::map<int, g2o::VertexSE3*>& vertex_map) {
     for (auto& [id, node] : graph_.nodes) {
         if (vertex_map.count(id)) {
             Eigen::Isometry3d optimized_pose = vertex_map.at(id)->estimate();
             node.pose = optimized_pose.matrix().cast<float>();
-            
-            spdlog::debug("[PGO] Updated node {} pose", id);
+            // spdlog::info("[PGO] Updated node {} pose in PGO", id);
         }
     }
 }
 
-void PoseGraphOptimizer::updateFramePoses() {
-    for (auto& [id, node] : graph_.nodes) {
-        if (node.frame) {
-            node.frame->set_Twb(node.pose);
-            spdlog::debug("[PGO] Updated frame {} pose", id);
-        }
-    }
-}
+// Eigen::Matrix<double,6,6> PoseGraphOptimizer::computeInformationMatrix(EdgeType type) const {
+//     Eigen::Matrix<double,6,6> information = Eigen::Matrix<double,6,6>::Zero();
 
-void PoseGraphOptimizer::correctMapPointsAfterOptimization() {
-    // Collect all map points from all keyframes
-    std::set<std::shared_ptr<MapPoint>> all_map_points;
-    
-    for (auto& [id, node] : graph_.nodes) {
-        if (!node.frame) continue;
-        
-        const auto& map_points = node.frame->get_map_points();
-        for (const auto& mp : map_points) {
-            if (mp && !mp->is_bad()) {
-                all_map_points.insert(mp);
-            }
-        }
-    }
-    
-    // Update each map point using its observations
-    for (auto& map_point : all_map_points) {
-        auto observations = map_point->get_observations();
-        if (observations.empty()) continue;
-        
-        // Use triangulation from all observations to update position
-        std::vector<Eigen::Vector3f> world_points;
-        
-        for (const auto& [frame_ptr, feat_idx] : observations) {
-            auto frame = frame_ptr.lock();
-            if (!frame) continue;
-            
-            auto feature = frame->get_feature(feat_idx);
-            if (!feature || !feature->is_valid()) continue;
-            
-            // Get 3D point in camera coordinates
-            Eigen::Vector3f camera_point = feature->get_3d_point();
-            if (camera_point.isZero()) continue;
-            
-            // Transform to world using optimized pose
-            Eigen::Matrix4f T_wb = frame->get_Twb();
-            Eigen::Matrix4f T_cb = frame->get_Tcb().cast<float>();
-            
-            Eigen::Vector4f camera_homogeneous(camera_point.x(), camera_point.y(), 
-                                             camera_point.z(), 1.0f);
-            Eigen::Vector4f body_point = T_cb * camera_homogeneous;
-            Eigen::Vector4f world_point = T_wb * body_point;
-            
-            world_points.push_back(world_point.head<3>());
-        }
-        
-        if (!world_points.empty()) {
-            // Use median or mean of all observations
-            Eigen::Vector3f new_position = Eigen::Vector3f::Zero();
-            for (const auto& pos : world_points) {
-                new_position += pos;
-            }
-            new_position /= world_points.size();
-            
-            map_point->set_position(new_position);
-        }
-    }
-    
-    spdlog::info("[PGO] Corrected {} map points", all_map_points.size());
-}
+//     double scale = 1.0;
+//     switch (type) {
+//         case EdgeType::ODOMETRY:
+//             scale = odometry_information_scale_;
+//             // g2o EdgeSE3 uses (translation, rotation) ordering for the 6-vector.
+//             information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale);       // translation
+//             information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 10.0);// rotation
+//             break;
+//         case EdgeType::LOOP_CLOSURE:
+//             scale = loop_closure_information_scale_;
+//             information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale * 2.0); // translation
+//             information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 5.0); // rotation
+//             break;
+//     }
+
+//     // Ensure symmetry and add tiny diagonal for numerical stability
+//     information = 0.5 * (information + information.transpose());
+//     const double eps = 1e-9;
+//     information += Eigen::Matrix<double,6,6>::Identity() * eps;
+
+//     return information;
+// }
 
 Eigen::Matrix<double,6,6> PoseGraphOptimizer::computeInformationMatrix(EdgeType type) const {
     Eigen::Matrix<double,6,6> information = Eigen::Matrix<double,6,6>::Zero();
-
     double scale = 1.0;
+
     switch (type) {
         case EdgeType::ODOMETRY:
+            // ODOMETRY IS STRONGER NOW
             scale = odometry_information_scale_;
-            // g2o EdgeSE3 uses (translation, rotation) ordering for the 6-vector.
-            information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale);       // translation
-            information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 10.0);// rotation
+            information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale * 10.0); // trans strong
+            information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 50.0); // rot very strong
             break;
+
         case EdgeType::LOOP_CLOSURE:
+            // LOOP CLOSURE WEAKER NOW
             scale = loop_closure_information_scale_;
-            information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale * 2.0); // translation
-            information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 5.0); // rotation
+            information.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * (scale * 1.0); // trans weaker
+            information.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * (scale * 2.0); // rot weaker
             break;
     }
 
-    // Ensure symmetry and add tiny diagonal for numerical stability
     information = 0.5 * (information + information.transpose());
-    const double eps = 1e-9;
-    information += Eigen::Matrix<double,6,6>::Identity() * eps;
-
+    information += Eigen::Matrix<double,6,6>::Identity() * 1e-9;
     return information;
 }
 

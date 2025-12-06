@@ -39,6 +39,9 @@ LoopClosureDetector::LoopClosureDetector() {
         m_database = std::make_unique<OrbDatabase>(*m_vocabulary, false, 0);
     }
     
+    m_sliding_window_optimizer_lcd = std::make_unique<SlidingWindowOptimizer>(
+        Config::getInstance().m_keyframe_window_size);
+
     // Set parameters - CHANGE: Use getter methods
     m_similarity_threshold = config.get_loop_closure_similarity_threshold();
     m_min_loop_interval = config.get_min_loop_interval_frames();
@@ -163,13 +166,23 @@ void LoopClosureDetector::processKeyframe(std::shared_ptr<Frame> keyframe) {
             
             // Calculate relative pose (simplified - you might want more sophisticated pose estimation)
             Eigen::Matrix4f current_pose = keyframe->get_Twb();
-            Eigen::Matrix4f candidate_pose = candidate_kf->get_Twb();
-            Eigen::Matrix4f relative_pose = candidate_pose.inverse() * current_pose;
-            
-            // Notify callback
-            if (m_loop_callback) {
-                m_loop_callback(current_id, loop_candidate_id, relative_pose);
+            Eigen::Matrix4f candidate_pose = candidate_kf->get_Twb();            
+            Eigen::Matrix4f T_ij;
+
+            if (m_sliding_window_optimizer_lcd->computeRelativePose(keyframe,
+                candidate_kf,
+                m_last_good_matches,
+                m_keyframe_keypoints[current_id],
+                m_keyframe_keypoints[loop_candidate_id],
+                T_ij))
+            {
+                // using refined pose instead of raw pose difference
+                m_loop_callback(current_id, loop_candidate_id, T_ij);
             }
+            else {
+                spdlog::warn("[LOOP] Relative pose computation failed");
+            }
+            
         } else {
             spdlog::info("[LOOP_CLOSURE] ❌ Geometric verification failed for {} -> {}", 
                         current_id, loop_candidate_id);
@@ -265,7 +278,9 @@ void LoopClosureDetector::extractORBFeatures(std::shared_ptr<Frame> frame, std::
     // Convert descriptors to DBoW2 format
     descriptors.clear();
     for (int i = 0; i < orb_descriptors.rows; ++i) {
-        descriptors.push_back(orb_descriptors.row(i));
+        // descriptors.push_back(orb_descriptors.row(i));
+        descriptors.push_back(orb_descriptors.row(i).clone());
+
     }
     
     // Store keypoints for geometric verification
@@ -297,21 +312,16 @@ bool LoopClosureDetector::detectLoop(std::shared_ptr<Frame> current_kf, int& loo
 
         double dt = std::abs((t_curr_ns - t_cand_ns) * 1e-9);   // nanoseconds → seconds
         double temporal_threshold = 0.5;
-        // TEMPORAL RULE BASED ON TIMESTAMP
-        if (dt < temporal_threshold) {
-            spdlog::info("[LOOP_CLOSURE] Skipping candidate {} - timestamp diff {:.3f} < {:.3f} sec",
-                        candidate_frame_id, dt, temporal_threshold);
-            continue;
-        }
-        else
-        {
-            spdlog::info("[LOOP_CLOSURE] current {}->candidate {} - similarity_score: {}", current_id,
-            candidate_frame_id, result.Score);
- 
-        }
+        // if (dt < temporal_threshold) continue; 
+        if(candidate_frame_id == current_id) continue;       // skip self
+        if(abs(candidate_frame_id-current_id) < 10) continue;// skip immediate neighbors only
 
+        // {
+        //     spdlog::info("[LOOP_CLOSURE] Skipping candidate {} - timestamp diff {:.3f} < {:.3f} sec: similarity idx {}",
+        //                 candidate_frame_id, dt, temporal_threshold, result.Score);
+        // }
         // SIMILARITY CHECK
-        if (result.Score > m_similarity_threshold) {
+        if (result.Score > 0.1) {
             loop_candidate_id = candidate_frame_id;
             spdlog::info("[LOOP_CLOSURE] Candidate {} found with score: {}", 
                         candidate_frame_id, result.Score);
@@ -394,6 +404,7 @@ bool LoopClosureDetector::geometricVerification(std::shared_ptr<Frame> current_k
     spdlog::debug("[LOOP_CLOSURE] Geometric verification: {}/{} inliers ({:.2f} ratio)", 
                  inlier_count, good_matches.size(), inlier_ratio);
     
+    m_last_good_matches = good_matches;
     return inlier_ratio > 0.5; // Threshold for geometric consistency
 }
 

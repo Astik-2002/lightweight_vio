@@ -275,8 +275,8 @@ private:
     mutable std::mutex m_map_points_mutex;
     std::condition_variable m_keyframes_cv;
     std::atomic<bool> m_keyframes_updated;
-
-
+    std::mutex m_pgo_update_mutex;
+    std::atomic<bool> m_pgo_update_in_progress{false};
     bool m_success_imu_init = false;
     
     // IMU optimization state

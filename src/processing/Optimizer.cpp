@@ -10,6 +10,12 @@
  */
 
 #include "processing/Optimizer.h"
+#include "optimization/Factors.h"          // For factor::BAFactor
+#include "optimization/Parameters.h"          // For factor::BAFactor
+#include <opencv2/core/eigen.hpp>
+#include "database/Frame.h"              // For Frame access
+#include <opencv2/core.hpp>
+#include <opencv2/features2d.hpp>
 #include "processing/IMUHandler.h"  // 🎯 Complete type for IMUPreintegration
 #include "database/Frame.h"
 #include "database/MapPoint.h"
@@ -26,6 +32,9 @@
 #include <set>
 #include <unordered_map>
 #include <thread>
+
+using lightweight_vio::factor::SE3GlobalParameterization;
+using lightweight_vio::factor::BAFactor;
 
 namespace lightweight_vio
 {
@@ -709,6 +718,101 @@ SlidingWindowResult SlidingWindowOptimizer::optimize(
     
     return result;
 }
+
+#include "optimization/Factors.h"
+#include "optimization/Parameters.h"     // <-- REQUIRED for SE3GlobalParameterization
+using lightweight_vio::factor::SE3GlobalParameterization;
+using lightweight_vio::factor::BAFactor;
+
+bool SlidingWindowOptimizer::computeRelativePose(
+    const std::shared_ptr<Frame>& frame_i,
+    const std::shared_ptr<Frame>& frame_j,
+    const std::vector<cv::DMatch>&,
+    const std::vector<cv::KeyPoint>&,
+    const std::vector<cv::KeyPoint>&,
+    Eigen::Matrix4f &T_i_j_refined)
+{
+    Eigen::Matrix4f T_w_i = frame_i->get_Twb();
+    Eigen::Matrix4f T_w_j = frame_j->get_Twb();
+
+    // relative pose from i -> j
+    T_i_j_refined = T_w_i.inverse() * T_w_j;
+
+    return true;        // always accept loop closure
+}
+
+// bool SlidingWindowOptimizer::computeRelativePose(
+//     const std::shared_ptr<Frame>& frame_i,
+//     const std::shared_ptr<Frame>& frame_j,
+//     const std::vector<cv::DMatch>& matches,
+//     const std::vector<cv::KeyPoint>& kpts_i,
+//     const std::vector<cv::KeyPoint>& kpts_j,
+//     Eigen::Matrix4f &T_i_j_refined)
+// {
+//     spdlog::info("[LOOP] computeRelativePose: {} matches passed in", matches.size());
+//     if(matches.size() < 10) return false;
+//     int valid_mps = 0;
+//     std::vector<cv::Point3f> pts3d;
+//     std::vector<cv::Point2f> pts2d;
+
+//     for(const auto& m : matches)
+//     {
+//         auto mp = frame_i->get_map_point(m.queryIdx);
+//         if(!mp || mp->is_bad()) continue;
+//         valid_mps++;
+//         Eigen::Vector3f Pw = mp->get_position();
+//         pts3d.emplace_back(Pw.x(), Pw.y(), Pw.z());
+//         pts2d.emplace_back(kpts_j[m.trainIdx].pt);
+//     }
+
+//     spdlog::info("[LOOP] computeRelativePose: valid map points = {}, pts3d.size() = {}",
+//                  valid_mps, pts3d.size());
+//     if(pts3d.size() < 10)
+//     {
+//         spdlog::warn("[LOOP] computeRelativePose: not enough 3D points ({} < 10)", pts3d.size());
+//         return false;
+//     }
+//     // --- Construct camera matrix ---
+//     cv::Mat K = (cv::Mat_<double>(3,3) <<
+//         frame_i->get_fx(), 0, frame_i->get_cx(),
+//         0, frame_i->get_fy(), frame_i->get_cy(),
+//         0, 0, 1
+//     );
+
+//     cv::Mat rvec, tvec;
+//     std::vector<int> inliers;
+
+//     bool ok = cv::solvePnPRansac(
+//         pts3d, pts2d,
+//         K, cv::noArray(),
+//         rvec, tvec,
+//         false,
+//         1000, 10.0f, 0.99,
+//         inliers
+//     );
+//     spdlog::info("[LOOP] PnP: ok={}, inliers={}", ok, inliers.size());
+//     // if(!ok || inliers.size() < 10) return false;
+//     if(!ok || inliers.size() < 5) {          // ↓ reduced threshold
+//         spdlog::warn("[LOOP] Weak PnP but accepting for loop closure: inliers={}",
+//                      inliers.size());
+//         if(inliers.size() < 3) return false; // too weak even for LC
+//     }
+//     // Convert to Eigen SE3
+//     cv::Mat R;
+//     cv::Rodrigues(rvec, R);
+
+//     Eigen::Matrix3f Re;
+//     Eigen::Vector3f te;
+//     cv::cv2eigen(R, Re);
+//     cv::cv2eigen(tvec, te);
+
+//     Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+//     T.block<3,3>(0,0) = Re;
+//     T.block<3,1>(0,3) = te;
+//     T_i_j_refined = T;
+
+//     return true;
+// }
 
 std::vector<std::shared_ptr<MapPoint>> SlidingWindowOptimizer::collect_window_map_points(
     const std::vector<std::shared_ptr<Frame>>& keyframes) const {

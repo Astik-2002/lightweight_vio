@@ -28,7 +28,9 @@
 #include <iostream>
 #include <numeric>
 #include <algorithm>
-
+#include "processing/backward.hpp"
+#define BACKWARD_HAS_DW 1
+namespace backward { backward::SignalHandling sh; }
 namespace lightweight_vio {
 
 Estimator::Estimator()
@@ -86,6 +88,7 @@ Estimator::Estimator()
     }
 }
 
+
 void Estimator::handleLoopClosure(int current_id, int candidate_id, Eigen::Matrix4f relative_pose) {
     std::lock_guard<std::mutex> lock(m_keyframes_mutex); // Thread safety
     
@@ -100,9 +103,25 @@ void Estimator::handleLoopClosure(int current_id, int candidate_id, Eigen::Matri
                 translation.x(), translation.y(), translation.z(),
                 angle_axis.angle() * 180.0f / M_PI);
     
+    float angle_deg = angle_axis.angle() * 180.0f / M_PI;
+
+    spdlog::info("[LOOP_CLOSURE] Relative pose - Translation: ({:.3f}, {:.3f}, {:.3f}), Rotation: {:.2f}°",
+                translation.x(), translation.y(), translation.z(), angle_deg);
+
+    // --- GATE THE LOOP CLOSURE POSE ---
+    const float max_loop_translation = 0.30f;  // 30 cm
+    const float max_loop_rotation    = 10.0f;  // 10 degrees
+
+    if (translation.norm() > max_loop_translation || std::abs(angle_deg) > max_loop_rotation) {
+        spdlog::warn("[LOOP_CLOSURE] Rejecting LC {} -> {}: too large relative pose "
+                     "(||t||={:.3f} m, angle={:.2f}°)",
+                     current_id, candidate_id, translation.norm(), angle_deg);
+        return;
+    }
+    
     if (m_pgo_enabled_ && m_pose_graph_optimizer) {
         // Add loop closure edge to pose graph
-        bool ok = m_pose_graph_optimizer->addLoopClosureEdge(current_id, candidate_id, relative_pose);
+        bool ok = m_pose_graph_optimizer->addLoopClosureEdge(current_id, candidate_id, relative_pose.inverse());
         if (!ok) 
         {
             spdlog::warn("[PGO] Nodes missing for loop closure {} -> {}, deferring...", current_id, candidate_id);
@@ -115,7 +134,41 @@ void Estimator::handleLoopClosure(int current_id, int candidate_id, Eigen::Matri
         size_t node_count = m_pose_graph_optimizer->getNodeCount();
         size_t edge_count = m_pose_graph_optimizer->getEdgeCount();
         spdlog::info("[PGO] Graph status: {} nodes, {} edges", node_count, edge_count);
-        applyPGOUpdates();
+        
+        // 🚨 CRITICAL FIX: Check if PGO update is already in progress
+        bool expected = false;
+        if (!m_pgo_update_in_progress.compare_exchange_strong(expected, true)) {
+            // PGO update is already running, queue this loop closure
+            spdlog::info("[PGO] Update already in progress, queuing loop closure {} -> {}", 
+                        current_id, candidate_id);
+            m_pending_loops.push_back({current_id, candidate_id, relative_pose});
+            return;
+        }
+        
+        // Start PGO update in a separate thread
+        std::thread([this]() {
+            try {
+                // Wait for current optimization to finish
+                while (m_pose_graph_optimizer->isOptimizationRunning()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                
+                // Apply the updates
+                applyPGOUpdates();
+                
+                // Clear the flag when done
+                m_pgo_update_in_progress.store(false);
+                
+                // Retry any pending loops that were queued
+                // retryPendingLoops();
+                
+            } catch (const std::exception& e) {
+                spdlog::error("[PGO] Exception in PGO update thread: {}", e.what());
+                // Ensure flag is cleared even on exception
+                m_pgo_update_in_progress.store(false);
+            }
+        }).detach();
+        
         spdlog::info("[PGO] PGO optimization triggered - corrections applied");
         
     } else 
@@ -124,176 +177,171 @@ void Estimator::handleLoopClosure(int current_id, int candidate_id, Eigen::Matri
     }
 }
 
-void Estimator::applyPGOUpdates() {
-    if (!m_pgo_enabled_ || !m_pose_graph_optimizer) {
-        spdlog::debug("[PGO] Pose graph optimization disabled or not initialized");
-        return;
-    }
+void Estimator::applyPGOUpdates() 
+{
+    // Ensure only one thread in here at a time
+    std::lock_guard<std::mutex> pgo_guard(m_pgo_update_mutex);
 
-    // Check if PGO has any optimized poses
-    if (m_pose_graph_optimizer->getNodeCount() == 0) {
-        spdlog::debug("[PGO] No optimized poses available");
-        return;
-    }
+    spdlog::info("[ESTIMATOR] applying pgo updates");
 
-    std::lock_guard<std::mutex> keyframes_lock(m_keyframes_mutex);
-    std::lock_guard<std::mutex> map_points_lock(m_map_points_mutex);
+    if (!m_pgo_enabled_ || !m_pose_graph_optimizer) return;
+    if (m_pose_graph_optimizer->getNodeCount() == 0) return;
 
-    spdlog::info("[PGO] 🎯 Applying pose graph optimization corrections");
+    std::lock_guard<std::mutex> key_lock(m_keyframes_mutex);
+    std::lock_guard<std::mutex> mp_lock(m_map_points_mutex);
 
-    // Get all optimized poses from PGO
-    auto optimized_poses = m_pose_graph_optimizer->getAllOptimizedPoses();
-    spdlog::info("[PGO] Retrieved {} optimized poses from pose graph", optimized_poses.size());
+    spdlog::info("[ESTIMATOR] Applying pose graph optimization corrections");
 
-    // 1. Update keyframe poses with optimized poses
     updateKeyframePosesWithPGO();
 
-    // 2. Update current pose if current frame is in the pose graph
-    if (m_current_frame && m_pose_graph_optimizer->hasOptimizedPose(m_current_frame->get_frame_id())) {
-        Eigen::Matrix4f optimized_pose = m_pose_graph_optimizer->getOptimizedPose(m_current_frame->get_frame_id());
-        if (!optimized_pose.isIdentity()) {
-            m_current_pose = optimized_pose;
-            m_current_frame->set_Twb(optimized_pose);
-            spdlog::debug("[PGO] Updated current frame {} pose", m_current_frame->get_frame_id());
-        }
-    } else if (m_current_frame && m_current_frame->is_keyframe()) {
-        // If current frame is a keyframe but not in PGO, use the most recent optimized pose
-        Eigen::Matrix4f recent_pose = m_pose_graph_optimizer->getMostRecentOptimizedPose();
-        if (!recent_pose.isIdentity()) {
-            m_current_pose = recent_pose;
-            m_current_frame->set_Twb(recent_pose);
-            spdlog::debug("[PGO] Updated current keyframe {} with most recent optimized pose", 
-                         m_current_frame->get_frame_id());
+    if (m_current_frame &&
+        m_pose_graph_optimizer->hasOptimizedPose(m_current_frame->get_frame_id())) {
+
+        Eigen::Matrix4f opt = m_pose_graph_optimizer->getOptimizedPose(m_current_frame->get_frame_id());
+        if (!opt.isIdentity()) {
+            m_current_pose = opt;
+            m_current_frame->set_Twb(opt);
         }
     }
 
-    // 3. Correct map points after pose updates
     correctMapPointsAfterPGO();
 
-    // 4. Log the correction statistics
     logPGOCorrectionStatistics();
 
-    spdlog::info("[PGO] ✅ Successfully applied pose graph optimization corrections");
+    spdlog::info("[PGO] Done applying pose graph corrections.");
 }
 
-void Estimator::updateKeyframePosesWithPGO() {
+void Estimator::updateKeyframePosesWithPGO() 
+{
+    spdlog::info("[ESTIMATOR] updating keyframe poses with PGO");
     if (!m_pose_graph_optimizer) return;
 
     int updated_count = 0;
-    int total_keyframes = m_keyframes.size();
 
-    for (auto& keyframe : m_keyframes) {
-        int frame_id = keyframe->get_frame_id();
-        
-        if (m_pose_graph_optimizer->hasOptimizedPose(frame_id)) {
-            Eigen::Matrix4f optimized_pose = m_pose_graph_optimizer->getOptimizedPose(frame_id);
-            
-            if (!optimized_pose.isIdentity()) {
-                // Store the original pose for comparison
-                Eigen::Matrix4f original_pose = keyframe->get_Twb();
-                
-                // Apply the optimized pose
-                keyframe->set_Twb(optimized_pose);
-                updated_count++;
+    for (auto& kf : m_keyframes) {
+        int id = kf->get_frame_id();
+        if (!m_pose_graph_optimizer->hasOptimizedPose(id)) continue;
 
-                // Log significant corrections
-                if (Config::getInstance().m_enable_debug_output) {
-                    Eigen::Vector3f original_translation = original_pose.block<3,1>(0,3);
-                    Eigen::Vector3f optimized_translation = optimized_pose.block<3,1>(0,3);
-                    float translation_correction = (optimized_translation - original_translation).norm();
-                    
-                    if (translation_correction > 0.01f) { // Log if correction > 1cm
-                        spdlog::debug("[PGO] Keyframe {} corrected by {:.3f}m", 
-                                     frame_id, translation_correction);
-                    }
-                }
-            }
-        }
+        Eigen::Matrix4f optT = m_pose_graph_optimizer->getOptimizedPose(id);
+        if (optT.isIdentity()) continue;
+
+        kf->set_Twb(optT);
+        updated_count++;
     }
 
-    spdlog::info("[PGO] Updated {}/{} keyframe poses with optimized poses", 
-                 updated_count, total_keyframes);
+    spdlog::info("[PGO] Updated {} keyframe poses.", updated_count);
 }
 
 void Estimator::correctMapPointsAfterPGO() {
-    // Collect all map points from all keyframes
-    std::set<std::shared_ptr<MapPoint>> all_map_points;
-    
-    for (const auto& keyframe : m_keyframes) {
-        const auto& map_points = keyframe->get_map_points();
-        for (const auto& mp : map_points) {
-            if (mp && !mp->is_bad()) {
-                all_map_points.insert(mp);
-            }
+
+    std::set<std::shared_ptr<MapPoint>> all_mps;
+
+    // Collect all map points
+    for (auto& kf : m_keyframes) {
+        for (auto& mp : kf->get_map_points()) {
+            if (mp && !mp->is_bad()) all_mps.insert(mp);
         }
     }
 
-    spdlog::info("[PGO] Correcting {} map points after pose optimization", all_map_points.size());
+    spdlog::info("[PGO] Correcting {} map points...", all_mps.size());
 
-    int corrected_count = 0;
-    int skipped_count = 0;
+    int updated = 0, skipped = 0;
 
-    // Update each map point using its observations with optimized poses
-    for (auto& map_point : all_map_points) {
-        auto observations = map_point->get_observations();
-        if (observations.empty()) {
-            skipped_count++;
+    const float max_depth = Config::getInstance().m_max_depth;   // or some sane constant
+    const float min_depth = std::max(0.05f, (float)Config::getInstance().m_min_depth);
+
+    for (auto& mp : all_mps) {
+
+        auto obs = mp->get_observations();
+        if (obs.empty()) { skipped++; continue; }
+
+        std::vector<Eigen::Vector3f> wp_candidates;
+
+        for (auto& [frame_weak, feat_idx] : obs) {
+            auto f = frame_weak.lock();
+            if (!f) continue;
+
+            auto feat = f->get_feature(feat_idx);
+            if (!feat || !feat->is_valid()) continue;
+
+            // ---- 1. Obtain depth (MUST be finite & positive) ----
+            if (!f->has_depth(feat_idx)) continue;
+            float depth = f->get_depth(feat_idx);
+            if (!std::isfinite(depth) || depth <= min_depth || depth > max_depth) continue;
+
+            // ---- 2. Backproject pixel to camera coordinates ----
+            float fx = f->get_fx(), fy = f->get_fy();
+            float cx = f->get_cx(), cy = f->get_cy();
+            cv::Point2f uv = feat->get_undistorted_coord();
+
+            float x = (uv.x - cx) * depth / fx;
+            float y = (uv.y - cy) * depth / fy;
+            float z = depth;
+
+            Eigen::Vector4f pc(x, y, z, 1.0f);
+            if (!pc.allFinite()) continue;
+
+            // ---- 3. Camera → body transform ----
+            // get_Tcb() is Body -> Camera, so invert it to get Camera -> Body
+            Eigen::Matrix4f T_cb = f->get_Tcb().cast<float>();     // body -> camera
+            Eigen::Matrix4f T_bc = T_cb.inverse();                 // camera -> body
+            Eigen::Vector4f pb = T_bc * pc;
+            if (!pb.allFinite()) continue;
+
+            // ---- 4. Body → world transform ----
+            Eigen::Matrix4f T_WB = f->get_Twb();                   // body -> world
+            Eigen::Vector4f pw = T_WB * pb;
+            if (!pw.allFinite()) continue;
+
+            wp_candidates.push_back(pw.head<3>());
+        }
+
+        if (wp_candidates.size() < 2) { skipped++; continue; }
+
+        // ---- 5. Compute robust mean ----
+        Eigen::Vector3f new_pos = Eigen::Vector3f::Zero();
+        for (auto& w : wp_candidates) new_pos += w;
+        new_pos /= (float)wp_candidates.size();
+
+        if (!new_pos.allFinite()) { skipped++; continue; }
+
+        // ---- 6. Validate that new_pos is "BA-safe" in its observing frames ----
+        bool valid_for_all = true;
+        for (auto& [frame_weak, feat_idx] : obs) {
+            auto f = frame_weak.lock();
+            if (!f) continue;
+
+            Eigen::Matrix4f T_cb = f->get_Tcb().cast<float>();     // body -> camera
+            Eigen::Matrix4f T_bc = T_cb.inverse();                 // camera -> body
+            Eigen::Matrix4f T_wb = f->get_Twb();                   // body -> world
+            Eigen::Matrix4f T_wc = T_wb * T_bc;                    // camera -> world
+            Eigen::Matrix4f T_cw = T_wc.inverse();                 // world -> camera
+
+            Eigen::Vector4f pw(new_pos.x(), new_pos.y(), new_pos.z(), 1.0f);
+            Eigen::Vector4f pc = T_cw * pw;
+
+            if (!pc.allFinite()) { valid_for_all = false; break; }
+            if (pc.z() <= min_depth || pc.z() > max_depth) {
+                valid_for_all = false;
+                break;
+            }
+        }
+
+        if (!valid_for_all) {
+            skipped++;
             continue;
         }
 
-        std::vector<Eigen::Vector3f> world_points;
-        int valid_observations = 0;
-
-        for (const auto& [frame_ptr, feat_idx] : observations) {
-            auto frame = frame_ptr.lock();
-            if (!frame) continue;
-
-            auto feature = frame->get_feature(feat_idx);
-            if (!feature || !feature->is_valid()) continue;
-
-            // Get 3D point in camera coordinates
-            Eigen::Vector3f camera_point = feature->get_3d_point();
-            if (camera_point.isZero()) continue;
-
-            // Transform to world using optimized pose (already applied to frame)
-            Eigen::Matrix4f T_wb = frame->get_Twb();
-            Eigen::Matrix4f T_cb = frame->get_Tcb().cast<float>();
-
-            Eigen::Vector4f camera_homogeneous(camera_point.x(), camera_point.y(), 
-                                             camera_point.z(), 1.0f);
-            Eigen::Vector4f body_point = T_cb * camera_homogeneous;
-            Eigen::Vector4f world_point = T_wb * body_point;
-
-            world_points.push_back(world_point.head<3>());
-            valid_observations++;
-        }
-
-        if (!world_points.empty()) {
-            // Use robust mean (remove outliers)
-            Eigen::Vector3f new_position = computeRobustMean(world_points);
-            
-            // Only update if the change is significant or it's the first optimization
-            Eigen::Vector3f old_position = map_point->get_position();
-            float position_change = (new_position - old_position).norm();
-            
-            if (position_change > 0.001f) { // Only update if change > 1mm
-                map_point->set_position(new_position);
-                corrected_count++;
-                
-                if (Config::getInstance().m_enable_debug_output && position_change > 0.01f) {
-                    spdlog::debug("[PGO] Map point corrected by {:.3f}m ({} observations)", 
-                                 position_change, valid_observations);
-                }
-            } else {
-                skipped_count++;
-            }
+        // ---- 7. Only update if reasonable ----
+        if ((new_pos - mp->get_position()).norm() > 1e-3f) {
+            mp->set_position(new_pos);
+            updated++;
         } else {
-            skipped_count++;
+            skipped++;
         }
     }
 
-    spdlog::info("[PGO] Map point correction: {} updated, {} unchanged/skipped", 
-                 corrected_count, skipped_count);
+    spdlog::info("[PGO] Map points updated: {}, skipped: {}", updated, skipped);
 }
 
 Eigen::Vector3f Estimator::computeRobustMean(const std::vector<Eigen::Vector3f>& points) {
@@ -1690,6 +1738,11 @@ void Estimator::retryPendingLoops() {
     std::vector<PendingLoop> still_pending;
 
     for (const auto& loop : m_pending_loops) {
+        // Check if we can process now
+        if (m_pgo_update_in_progress.load()) {
+            still_pending.push_back(loop);
+            continue;
+        }
 
         bool ok = m_pose_graph_optimizer->addLoopClosureEdge(
             loop.current_id, loop.candidate_id, loop.relative_pose);
@@ -1697,8 +1750,9 @@ void Estimator::retryPendingLoops() {
         if (ok) {
             spdlog::info("[PGO] Retried pending loop closure added: {} -> {}",
                          loop.current_id, loop.candidate_id);
-
-            applyPGOUpdates(); 
+            
+            // Don't call applyPGOUpdates() here - it will be called from handleLoopClosure
+            // after setting the flag
         } else {
             still_pending.push_back(loop);
         }
@@ -2106,47 +2160,6 @@ void lightweight_vio::Estimator::transfer_imu_data_to_keyframe(std::shared_ptr<F
 }
 
 InertialOptimizationResult lightweight_vio::Estimator::try_initialize_imu() {
-    /*
-     * 🎯 IMU INITIALIZATION WITH GRAVITY ESTIMATION & BIAS OPTIMIZATION
-     * 
-     * OBJECTIVE: Initialize IMU parameters (gravity direction, biases) using visual-inertial constraints
-     * 
-     * TWO-PHASE PROCESS:
-     * ===============================================================================
-     * PHASE 1: GRAVITY ESTIMATION from visual-inertial comparison
-     * - Visual odometry provides true motion: T_visual = T_wb(t1) * T_wb(t0)^-1  
-     * - IMU integration without gravity: T_imu = integrate(omega, a_b - g_b)
-     * - Gravity effect emerges from difference: Δp_gravity = p_visual - p_imu
-     * - Average over multiple intervals to find gravity direction
-     * 
-     * PHASE 2: IMU PARAMETER OPTIMIZATION using factor graph
-     * - InertialGravityFactor: Constrains gravity-aligned accelerometer measurements
-     * - Optimize velocities and biases jointly with known gravity direction
-     * - Establishes consistent IMU coordinate frame for future VIO
-     * ===============================================================================
-     * 
-     * ===============================================================================
-     * MATHEMATICAL FOUNDATION:
-     * 
-     * Gravity Estimation:
-     * - For interval [t0, t1]: Δp_gravity_i = T_visual.translation() - integrate(v_imu_no_gravity)
-     * - Gravity vector: g_world = normalize(mean(Δp_gravity_i)) * 9.81
-     * 
-     * Parameter Optimization:
-     * - States: [poses, velocities, accel_bias, gyro_bias] 
-     * - Factors: InertialGravityFactor(gravity, accel_measurements)
-     * - Result: Consistent IMU biases and initial velocities
-     * ===============================================================================
-     * 
-     * ===============================================================================
-     * IMPLEMENTATION FLOW:
-     * 1. Collect visual poses from keyframes (≥3 required)
-     * 2. Extract corresponding IMU measurements between keyframes
-     * 3. Estimate gravity direction from visual-IMU displacement differences
-     * 4. Optimize IMU biases and velocities using InertialGravityFactor
-     * 5. Initialize IMU handler with estimated parameters for future VIO
-     * ===============================================================================
-     */
     
     InertialOptimizationResult result;  // Default success = false
     

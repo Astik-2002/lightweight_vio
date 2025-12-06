@@ -2,6 +2,7 @@
 
 #include "database/Frame.h"
 #include "DBoW2/DBoW2.h"
+#include "Optimizer.h"
 #include <opencv2/opencv.hpp>
 #include <memory>
 #include <thread>
@@ -62,6 +63,10 @@ private:
     std::unordered_map<int, std::shared_ptr<Frame>> m_keyframes;
     std::unordered_map<int, std::vector<cv::Mat>> m_keyframe_descriptors;
     std::unordered_map<int, std::vector<cv::KeyPoint>> m_keyframe_keypoints;
+    std::unique_ptr<SlidingWindowOptimizer> m_sliding_window_optimizer_lcd;
+    std::vector<cv::DMatch> m_last_good_matches;
+
+
 };
 
 } // namespace lightweight_vio
